@@ -1,5 +1,14 @@
-import { Athena, AWSError } from 'aws-sdk'
-import { ResultConfiguration } from 'aws-sdk/clients/athena'
+import {
+  AthenaClient as AwsAthenaClient,
+  AthenaServiceException,
+  EncryptionOption,
+  GetQueryExecutionCommand,
+  StartQueryExecutionCommand,
+  StartQueryExecutionInput,
+  StopQueryExecutionCommand,
+  TooManyRequestsException,
+} from '@aws-sdk/client-athena'
+import { GetObjectCommand, S3 } from '@aws-sdk/client-s3'
 import { Readable } from 'stream'
 
 export interface AthenaRequestConfig {
@@ -8,30 +17,9 @@ export interface AthenaRequestConfig {
   retryWaitMax?: number
   retryCountMax?: number
   database?: string
-  encryptionOption?: string
+  encryptionOption?: EncryptionOption
   encryptionKmsKey?: string
   workGroup?: string
-}
-
-interface EncryptionConfigurationParam {
-  EncryptionOption: string
-  KmsKey?: string
-}
-
-interface ResultConfigurationParam {
-  OutputLocation: string
-  EncryptionConfiguration?: EncryptionConfigurationParam
-}
-
-interface QueryExecutionContextParam {
-  Database: string
-}
-
-interface AthenaRequestParams {
-  QueryString: string
-  ResultConfiguration: ResultConfigurationParam
-  QueryExecutionContext: QueryExecutionContextParam
-  WorkGroup: string
 }
 
 const defaultBaseRetryWait = 200
@@ -39,8 +27,8 @@ const defaultRetryWaitMax = 10000
 const defaultRetryCountMax = 10
 
 export class AthenaRequest {
-  private athena: any
-  private s3: any
+  private athena: AwsAthenaClient
+  private s3: S3
   constructor(athena: any, s3: any) {
     this.athena = athena
     this.s3 = s3
@@ -48,7 +36,7 @@ export class AthenaRequest {
   public startQuery(query: string, config: AthenaRequestConfig) {
     return new Promise<string>((resolve, reject) => {
       let retryCount = 0
-      const params: AthenaRequestParams = {
+      const params: StartQueryExecutionInput = {
         QueryString: query,
         ResultConfiguration: {
           OutputLocation: config.bucketUri,
@@ -66,19 +54,22 @@ export class AthenaRequest {
         },
         WorkGroup: config.workGroup || 'primary',
       }
-      const loopFunc = () => {
-        this.athena.startQueryExecution(params, (err: AWSError, data: any) => {
-          if (err && isRetryException(err) && canRetry(retryCount, config)) {
+      const loopFunc = async () => {
+        try {
+          const data = await this.athena.send(
+            new StartQueryExecutionCommand(params),
+          )
+          return data.QueryExecutionId
+        } catch (err) {
+          if (isRetryException(err) && canRetry(retryCount, config)) {
             let wait =
               (config.baseRetryWait || defaultBaseRetryWait) *
               Math.pow(2, retryCount++)
             wait = Math.min(wait, config.retryWaitMax || defaultRetryWaitMax)
             return setTimeout(loopFunc, wait)
-          } else if (err) {
-            return reject(err)
           }
-          return resolve(data.QueryExecutionId)
-        })
+          throw err
+        }
       }
       loopFunc()
     })
@@ -119,7 +110,7 @@ export class AthenaRequest {
           }
           return resolve(isSucceed)
         })
-        .catch((err: AWSError) => {
+        .catch((err: AthenaServiceException) => {
           return reject(err)
         })
     })
@@ -131,19 +122,20 @@ export class AthenaRequest {
       const params = {
         QueryExecutionId: queryId,
       }
-      const loopFunc = () => {
-        this.athena.stopQueryExecution(params, (err: AWSError) => {
-          if (err && isRetryException(err) && canRetry(retryCount, config)) {
+      const loopFunc = async () => {
+        try {
+          await this.athena.send(new StopQueryExecutionCommand(params))
+          return
+        } catch (err) {
+          if (isRetryException(err) && canRetry(retryCount, config)) {
             const wait = Math.pow(
               config.baseRetryWait || defaultBaseRetryWait,
               retryCount++,
             )
             return setTimeout(loopFunc, wait)
-          } else if (err) {
-            return reject(err)
           }
-          return resolve()
-        })
+          throw err
+        }
       }
       loopFunc()
     })
@@ -155,42 +147,48 @@ export class AthenaRequest {
       const params = {
         QueryExecutionId: queryId,
       }
-      const loopFunc = () => {
-        this.athena.getQueryExecution(params, (err: AWSError, data: any) => {
-          if (err && isRetryException(err) && canRetry(retryCount, config)) {
+      const loopFunc = async () => {
+        try {
+          const data = await this.athena.send(
+            new GetQueryExecutionCommand(params),
+          )
+          return data.QueryExecution
+        } catch (err) {
+          if (isRetryException(err) && canRetry(retryCount, config)) {
             const wait = Math.pow(
               config.baseRetryWait || defaultBaseRetryWait,
               retryCount++,
             )
             return setTimeout(loopFunc, wait)
-          } else if (err) {
-            return reject(err)
           }
-          return resolve(data.QueryExecution)
-        })
+          throw err
+        }
       }
       loopFunc()
     })
   }
 
-  public getResultsStream(s3Uri: string): Readable {
+  public async getResultsStream(s3Uri: string): Promise<Readable> {
     const arr = s3Uri.replace('s3://', '').split('/')
     const bucket = arr.shift() || ''
     const key = arr.join('/')
-    return this.s3
-      .getObject({
+    const response = await this.s3.send(
+      new GetObjectCommand({
         Bucket: bucket,
         Key: key,
-      })
-      .createReadStream()
+      }),
+    )
+    // TODO retore a proper streaming solution - this reads all the bytes up front before synthesizing a stream.
+    const data = await response.Body!.transformToByteArray()
+    return Readable.from(data)
   }
 }
 
-function isRetryException(err: AWSError) {
+function isRetryException(err: any) {
   return (
-    err.code === 'ThrottlingException' ||
-    err.code === 'TooManyRequestsException' ||
-    err.message === 'Query exhausted resources at this scale factor'
+    // err.code === 'ThrottlingException' || // XXX identify the sdk3 analog to this.
+    err instanceof TooManyRequestsException ||
+    err.message === 'Query exhausted resources at this scale factor' // XXX confirm the sdk3 analog to this.
   )
 }
 

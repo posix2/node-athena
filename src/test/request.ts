@@ -1,3 +1,4 @@
+import { EncryptionOption } from '@aws-sdk/client-athena'
 import * as assert from 'assert'
 import * as fs from 'fs'
 import { AthenaRequest } from '../lib/request'
@@ -149,7 +150,7 @@ describe('Array', () => {
         const request = new AthenaRequest(mockAthena, mockS3)
         const configWithEncryption = {
           ...config,
-          encryptionOption: 'SSE_KMS',
+          encryptionOption: EncryptionOption.SSE_KMS,
           encryptionKmsKey: 'arn:xxxx:xxxx',
         }
         request.startQuery('query', configWithEncryption).then((data: any) => {
@@ -303,15 +304,13 @@ describe('Array', () => {
     })
   })
 
-  describe('#getResultsStream()', () => {
-    it('should return getResultsStream', (done: any) => {
-      new Promise((resolve: any) => {
-        const mockAthena = getMockAthena()
-        const mockS3 = getMockS3()
-        const request = new AthenaRequest(mockAthena, mockS3)
-        const readStream = request.getResultsStream('s3://xxxx/yyyy')
-        return resolve()
-      }).then(done)
+  describe('#getResultsStream()', async () => {
+    it('should return getResultsStream', async (done: any) => {
+      const mockAthena = getMockAthena()
+      const mockS3 = getMockS3()
+      const request = new AthenaRequest(mockAthena, mockS3)
+      const readStream = await request.getResultsStream('s3://xxxx/yyyy')
+      done()
     })
   })
 })

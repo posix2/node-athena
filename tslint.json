@@ -1,8 +1,6 @@
 {
   "extends": [
-    "tslint:latest",
-    "tslint-eslint-rules",
-    "tslint-plugin-prettier"
+    "tslint:latest"
   ],
   "rules": {
     "no-console": false,

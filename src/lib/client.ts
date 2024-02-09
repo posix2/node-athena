@@ -1,4 +1,7 @@
-import { Athena } from 'aws-sdk'
+import {
+  AthenaClient as AwsAthenaClient,
+  QueryExecution,
+} from '@aws-sdk/client-athena'
 import * as csv from 'csv-parser'
 import { Transform } from 'stream'
 import { setTimeout } from 'timers'
@@ -7,7 +10,7 @@ import * as util from './util'
 
 export interface AthenaExecutionResult<T> {
   records: T[]
-  queryExecution: Athena.QueryExecution
+  queryExecution: QueryExecution
 }
 
 export interface AthenaExecutionSelect<T> {
@@ -68,7 +71,7 @@ export class AthenaClient {
   ) {
     // Execute
     const currentConfig = { ...this.config }
-    const csvTransform = new csv()
+    const csvTransform: Transform = csv()
     // const athenaStream = new AthenaStream<T>(currentConfig)
     this._execute(query, csvTransform, currentConfig)
 
@@ -76,13 +79,13 @@ export class AthenaClient {
     if (callback !== undefined) {
       let isEnd = false
       const records: T[] = []
-      let queryExecution: Athena.QueryExecution
+      let queryExecution: QueryExecution
 
       // Callback
       csvTransform.on('data', (record: T) => {
         records.push(record)
       })
-      csvTransform.on('query_end', (q: Athena.QueryExecution) => {
+      csvTransform.on('query_end', (q: QueryExecution) => {
         queryExecution = q
       })
       csvTransform.on('end', (record: T) => {
@@ -106,13 +109,13 @@ export class AthenaClient {
         toPromise: () => {
           return new Promise<AthenaExecutionResult<T>>((resolve, reject) => {
             const records: T[] = []
-            let queryExecution: Athena.QueryExecution
+            let queryExecution: QueryExecution
 
             // Add event listener for promise
             csvTransform.on('data', (record: T) => {
               records.push(record)
             })
-            csvTransform.on('query_end', (q: Athena.QueryExecution) => {
+            csvTransform.on('query_end', (q: QueryExecution) => {
               queryExecution = q
             })
             csvTransform.on('end', (record: T) => {
@@ -147,7 +150,7 @@ export class AthenaClient {
       )
     }
 
-    let queryExecution: Athena.QueryExecution
+    let queryExecution: QueryExecution
 
     // Athena
     try {
@@ -198,7 +201,7 @@ export class AthenaClient {
         ) {
           throw new Error('query outputlocation is empty')
         }
-        const resultsStream = this.request.getResultsStream(
+        const resultsStream = await this.request.getResultsStream(
           queryExecution.ResultConfiguration.OutputLocation,
         )
         resultsStream.pipe(csvTransform)

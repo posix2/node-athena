@@ -96,7 +96,7 @@ const failStopQuery = (queryId: string, requestConfig: AthenaRequestConfig) => {
 }
 
 const successGetResultsStream = (s3Uri: string) => {
-  return fs.createReadStream('./src/test/test.csv')
+  return Promise.resolve(fs.createReadStream('./src/test/test.csv'))
 }
 
 const failGetResultsStream = (s3Uri: string) => {
